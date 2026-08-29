@@ -1,0 +1,110 @@
+{{define "title"}}CodeScan — new scan{{end}}
+{{define "content"}}
+<div class="page-split">
+  <div class="page-main">
+    <section class="card">
+      <h1>New scan</h1>
+      <div class="tabs">
+        <button type="button" class="tab active" data-tab="git">Public Git repo</button>
+        <button type="button" class="tab" data-tab="zip">Upload zip/tar</button>
+      </div>
+
+      <form id="git-form" class="scan-form" data-panel="git">
+        <label>Repository URL
+          <input type="url" name="source_ref" placeholder="https://github.com/org/repo.git" required>
+        </label>
+        <label>Branch <span class="muted">(optional — default branch if empty)</span>
+          <input type="text" name="branch" autocomplete="off" placeholder="e.g. main, develop">
+        </label>
+        <label>Access token <span class="muted">(private repos only — used once, never stored)</span>
+          <input type="password" name="token" autocomplete="off" placeholder="optional">
+        </label>
+        <button type="submit">Start scan</button>
+        <p class="hint">Allowed hosts: <span data-allowed-hosts>{{.AllowedHosts}}</span>. HTTPS only.</p>
+      </form>
+
+      <form id="zip-form" class="scan-form hidden" data-panel="zip" enctype="multipart/form-data">
+        <label>Archive (.zip / .tar / .tar.gz)
+          <input type="file" name="archive" accept=".zip,.tar,.gz,.tgz" required>
+        </label>
+        <button type="submit">Upload &amp; scan</button>
+        <p class="hint">Max upload 200 MiB. Extracted tree capped at 2 GiB.</p>
+      </form>
+
+      <p id="form-error" class="error hidden"></p>
+    </section>
+  </div>
+
+  <aside class="card page-side">
+    <div class="row-between side-head">
+      <div>
+        <h2>Allowed hosts</h2>
+        <p class="muted small side-sub">Hostnames or HTTPS repo URLs</p>
+      </div>
+      <span class="side-badge" id="saved-badge">{{if .ExtraAllowedHostList}}{{len .ExtraAllowedHostList}} saved{{else}}Saved in app{{end}}</span>
+    </div>
+    <form id="hosts-form" class="scan-form side-form">
+      <label>Extra allowed hosts <span class="muted">(comma-separated)</span>
+        <textarea name="hosts" rows="6" autocomplete="off" placeholder="gitlab.bieases.com&#10;or&#10;https://gitlab.bieases.com/group/repo.git">{{.ExtraAllowedHosts}}</textarea>
+      </label>
+      <button type="submit">Save hosts</button>
+      <p class="hint">Paste one or more hosts or full HTTPS repository URLs. We keep only the host part.</p>
+      <p class="hint">Current effective hosts: <span data-allowed-hosts>{{.AllowedHosts}}</span>.</p>
+      <div class="saved-hosts-block">
+        <div class="saved-hosts-head">
+          <span class="muted small">Saved hosts</span>
+          <span class="saved-count" id="saved-count">{{len .ExtraAllowedHostList}}</span>
+        </div>
+        <div class="saved-hosts-list" id="saved-hosts-list">
+          {{range .ExtraAllowedHostList}}
+          <span class="host-chip">{{.}}</span>
+          {{else}}
+          <span class="muted small" id="saved-hosts-empty">No extra hosts saved yet.</span>
+          {{end}}
+        </div>
+      </div>
+      <p id="hosts-msg" class="hint hidden"></p>
+    </form>
+  </aside>
+</div>
+
+<section class="card">
+  <div class="row-between">
+    <div>
+      <h2>Recent scans</h2>
+      <p class="muted small section-sub">{{.ScanCount}} total · {{.PerPage}} per page</p>
+    </div>
+    <div class="list-actions">
+      {{if gt .TotalPages 1}}<span class="muted small">Page {{.Page}} / {{.TotalPages}}</span>{{end}}
+      <a class="muted small" href="/">refresh</a>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table class="scans" id="scan-list">
+          <thead><tr><th>Source</th><th>Branch</th><th>Type</th><th>Status</th><th>Findings</th><th>Created</th><th></th></tr></thead>
+          <tbody>
+            {{range .Scans}}
+            <tr data-row="{{.ID}}">
+              <td class="mono scan-source"><a href="/scans/{{.ID}}">{{.SourceRef}}</a></td>
+              <td class="mono small scan-branch">{{if eq .SourceType "git"}}{{if .Branch}}{{.Branch}}{{else}}<span class="muted">not recorded</span>{{end}}{{else}}<span class="muted">—</span>{{end}}</td>
+              <td>{{.SourceType}}</td>
+              <td><span class="badge s-{{.Status}}">{{.Status}}</span></td>
+              <td class="scan-findings">{{template "sevcounts" .Summary}}</td>
+              <td class="muted small" data-ts="{{.CreatedAt}}">{{.CreatedAt}}</td>
+              <td><button type="button" class="del-scan" data-del="{{.ID}}" title="Delete this scan" aria-label="Delete scan">&times;</button></td>
+            </tr>
+        {{else}}
+        <tr><td colspan="7" class="muted">No scans yet.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{if gt .TotalPages 1}}
+  <div class="pager">
+    {{if .HasPrevPage}}<a class="btn" href="/?page={{.PrevPage}}">← Previous</a>{{else}}<span class="btn disabled">← Previous</span>{{end}}
+    <span class="pager-status">Page {{.Page}} of {{.TotalPages}}</span>
+    {{if .HasNextPage}}<a class="btn" href="/?page={{.NextPage}}">Next →</a>{{else}}<span class="btn disabled">Next →</span>{{end}}
+  </div>
+  {{end}}
+</section>
+{{end}}

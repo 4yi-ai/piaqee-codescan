@@ -1,0 +1,99 @@
+{{define "title"}}Scan {{.Job.ID}}{{end}}
+{{define "content"}}
+<section class="card" id="job-card" data-job-id="{{.Job.ID}}" data-status="{{.Job.Status}}">
+  <div class="row-between">
+    <h1>Scan result</h1>
+    <a class="muted small" href="/">← all scans</a>
+  </div>
+  <dl class="meta job-meta">
+    <div class="meta-wide"><dt>Source</dt><dd class="mono meta-break">{{.Job.SourceRef}}</dd></div>
+    <div><dt>Branch</dt><dd class="mono">{{if eq .Job.SourceType "git"}}{{if .Job.Branch}}{{.Job.Branch}}{{else}}<span class="muted">not recorded</span>{{end}}{{else}}—{{end}}</dd></div>
+    <div><dt>Type</dt><dd>{{.Job.SourceType}}</dd></div>
+    <div><dt>Status</dt><dd><span class="badge s-{{.Job.Status}}" id="job-status">{{.Job.Status}}</span>
+      {{if .Job.Progress}}<span class="muted small" id="job-progress">{{.Job.Progress}}</span>{{else}}<span class="muted small" id="job-progress"></span>{{end}}</dd></div>
+    <div><dt>Findings</dt><dd id="job-summary" class="summary-wrap">{{template "sevcounts" .Job.Summary}}</dd></div>
+  </dl>
+  {{if .Job.Error}}
+    {{if eq .Job.Status "done"}}<p class="warn">Note: {{.Job.Error}}</p>
+    {{else}}<p class="error">Error: {{.Job.Error}}</p>{{end}}
+  {{end}}
+  <div class="actions">
+    {{if or (eq .Job.Status "queued") (eq .Job.Status "fetching") (eq .Job.Status "scanning")}}
+    <button class="btn danger" id="cancel-btn">Cancel</button>
+    <span class="muted small" id="live-note">live — updating…</span>
+    {{else}}
+    <a class="btn primary" href="/api/scans/{{.Job.ID}}/export?format=pdf">Download PDF report</a>
+    <a class="btn" href="/api/scans/{{.Job.ID}}/export?format=json">Export JSON</a>
+    <a class="btn" href="/api/scans/{{.Job.ID}}/export?format=sarif">Export SARIF</a>
+    {{end}}
+  </div>
+</section>
+
+{{if .Stats}}
+<section class="card">
+  <h2>Statistics <span class="muted small">by category × severity</span></h2>
+  <table class="stats">
+    <thead><tr><th>Category</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Info</th><th>Total</th></tr></thead>
+    <tbody>
+      {{range .Stats}}
+      <tr>
+        <td class="stat-cat">{{.Label}}</td>
+        <td class="{{if .Crit}}c-critical{{else}}z{{end}}">{{if .Crit}}{{.Crit}}{{else}}–{{end}}</td>
+        <td class="{{if .High}}c-high{{else}}z{{end}}">{{if .High}}{{.High}}{{else}}–{{end}}</td>
+        <td class="{{if .Med}}c-medium{{else}}z{{end}}">{{if .Med}}{{.Med}}{{else}}–{{end}}</td>
+        <td class="{{if .Low}}c-low{{else}}z{{end}}">{{if .Low}}{{.Low}}{{else}}–{{end}}</td>
+        <td class="{{if .Info}}c-info{{else}}z{{end}}">{{if .Info}}{{.Info}}{{else}}–{{end}}</td>
+        <td class="stat-tot">{{.Tot}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+
+<section class="card" id="findings-card">
+  <div class="row-between">
+    <h2>Findings <span class="muted small">({{len .Findings}})</span></h2>
+    <div class="filters" id="filters">
+      <a href="#" data-filter="" class="active">all</a>
+      <a href="#" data-filter="critical">critical</a>
+      <a href="#" data-filter="high">high</a>
+      <a href="#" data-filter="medium">medium</a>
+      <a href="#" data-filter="low">low</a>
+      <a href="#" id="direct-only" data-active="0" title="Direct dependencies are ones you declare yourself — fix those first">direct deps</a>
+      <a href="#" id="hide-unused" data-active="0" title="Hide direct deps that are never imported in the source (suspected unused)">hide unused?</a>
+    </div>
+  </div>
+
+  {{range .Tiers}}
+  <div class="tier tier-{{.Class}}" data-tier="{{.Num}}">
+    <div class="tier-head tier-{{.Class}}">
+      <span class="tier-label">{{.Label}}</span>
+      <span class="tier-count">{{len .Findings}}</span>
+    </div>
+    <p class="tier-sub muted small">{{.Subtitle}}</p>
+    <table class="findings">
+      <thead><tr><th>Sev</th><th>Category</th><th>Rule</th><th>Location</th><th>Detail</th></tr></thead>
+      <tbody>
+        {{range .Findings}}
+        <tr data-sev="{{.Severity}}" data-rel="{{.Relationship}}" data-usage="{{.Usage}}">
+          <td><span class="pill c-{{.Severity}}">{{.Severity}}</span></td>
+          <td>{{.Category}}{{if eq .Relationship "direct"}} <span class="dep dep-direct">direct</span>{{if eq .Usage "unused_suspected"}} <span class="dep dep-unused">unused?</span>{{end}}{{else if eq .Relationship "indirect"}} <span class="dep dep-indirect">transitive</span>{{end}}</td>
+          <td class="mono small">{{.RuleID}}</td>
+          <td class="mono small">{{.FilePath}}{{if .Line}}:{{.Line}}{{end}}
+            {{if .PkgName}}<span class="muted">{{.PkgName}}{{if .PkgVer}}@{{.PkgVer}}{{end}}</span>{{end}}</td>
+          <td>{{.Title}}{{if .FixedVer}} <span class="muted small">fix: {{.FixedVer}}</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p id="no-findings" class="muted">
+    {{if or (eq .Job.Status "queued") (eq .Job.Status "fetching") (eq .Job.Status "scanning")}}
+      Scan in progress…
+    {{else}}No findings.{{end}}
+  </p>
+  {{end}}
+</section>
+{{end}}

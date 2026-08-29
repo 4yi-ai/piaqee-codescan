@@ -1,0 +1,14 @@
+# Keep the build context small and reproducible.
+.git
+.gitignore
+data/
+jobs/
+*.db
+*.db-wal
+*.db-shm
+# The built binary at repo root — anchored so it does NOT exclude cmd/codescan/ source.
+/codescan
+.env
+docs/
+# Exclude root-level docs but NOT source .md that COPY needs.
+/README.md
