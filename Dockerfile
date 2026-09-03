@@ -68,13 +68,11 @@ RUN set -eux; \
     find /app/rules/registry -type f \( -name '*.test.yaml' -o -name '*.test.yml' -o -name '*.fixed.*' \) -delete; \
     echo "vendored semgrep rules: $(find /app/rules/registry -name '*.yaml' -o -name '*.yml' | wc -l) files"
 
-ARG CODESCAN_API_KEY
 ENV HOST=0.0.0.0 \
     PORT=8080 \
     DATA_DIR=/app/data \
     TRIVY_CACHE_DIR=/app/data/trivy-cache \
-    CODESCAN_RULES_DIR=/app/rules \
-    CODESCAN_API_KEY=${CODESCAN_API_KEY}
+    CODESCAN_RULES_DIR=/app/rules
 
 RUN mkdir -p /app/data && chown -R 10001:10001 /app
 USER 10001:10001
