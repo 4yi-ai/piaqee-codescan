@@ -112,9 +112,46 @@ func parseSemgrep(data []byte, dir string) ([]store.Finding, error) {
 			Message:  strings.TrimSpace(r.Extra.Message),
 			FilePath: relPath(dir, r.Path),
 			Line:     r.Start.Line,
+			CWE:      cweString(r.Extra.Metadata.CWE),
 		})
 	}
 	return out, nil
+}
+
+// cweString normalizes semgrep's metadata.cwe, which is either a single string
+// ("CWE-89: SQL Injection") or an array of such strings, into a comma-separated
+// list of bare CWE ids (e.g. "CWE-89,CWE-79"). Anything without a "CWE-<n>"
+// prefix is passed through trimmed. Returns "" when no CWE is present.
+func cweString(v any) string {
+	var ids []string
+	add := func(x any) {
+		s, ok := x.(string)
+		if !ok {
+			return
+		}
+		if s = normCWE(s); s != "" {
+			ids = append(ids, s)
+		}
+	}
+	switch t := v.(type) {
+	case string:
+		add(t)
+	case []any:
+		for _, e := range t {
+			add(e)
+		}
+	}
+	return strings.Join(ids, ",")
+}
+
+// normCWE extracts the bare "CWE-<n>" token from a semgrep CWE string, dropping
+// the trailing description ("CWE-89: SQL Injection" -> "CWE-89").
+func normCWE(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return s
 }
 
 // shortRuleTitle turns a dotted check_id into its last, human-ish segment.

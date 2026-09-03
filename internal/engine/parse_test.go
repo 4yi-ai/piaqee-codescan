@@ -33,6 +33,47 @@ func TestParseSemgrep(t *testing.T) {
 	}
 }
 
+func TestParseSemgrepCWE(t *testing.T) {
+	// metadata.cwe as a single string (semgrep's common shape).
+	single := []byte(`{"results":[
+	  {"check_id":"r.sqli","path":"/work/src/db.py","start":{"line":3},"end":{"line":3},
+	   "extra":{"message":"m","severity":"ERROR","metadata":{"cwe":"CWE-89: SQL Injection"}}}
+	]}`)
+	fs, err := parseSemgrep(single, "/work/src")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if fs[0].CWE != "CWE-89" {
+		t.Errorf("single cwe = %q, want CWE-89", fs[0].CWE)
+	}
+
+	// metadata.cwe as an array.
+	arr := []byte(`{"results":[
+	  {"check_id":"r.xss","path":"/work/src/v.js","start":{"line":1},"end":{"line":1},
+	   "extra":{"message":"m","severity":"WARNING","metadata":{"cwe":["CWE-79: XSS","CWE-80"]}}}
+	]}`)
+	fs, err = parseSemgrep(arr, "/work/src")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if fs[0].CWE != "CWE-79,CWE-80" {
+		t.Errorf("array cwe = %q, want CWE-79,CWE-80", fs[0].CWE)
+	}
+
+	// no cwe → empty.
+	none := []byte(`{"results":[
+	  {"check_id":"r.x","path":"/work/src/a.go","start":{"line":1},"end":{"line":1},
+	   "extra":{"message":"m","severity":"INFO","metadata":{}}}
+	]}`)
+	fs, err = parseSemgrep(none, "/work/src")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if fs[0].CWE != "" {
+		t.Errorf("missing cwe = %q, want empty", fs[0].CWE)
+	}
+}
+
 func TestParseTrivy(t *testing.T) {
 	data := []byte(`{
 	  "Results": [
