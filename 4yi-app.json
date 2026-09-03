@@ -16,9 +16,6 @@
         "DATA_DIR": "/app/data",
         "TRIVY_CACHE_DIR": "/app/data/trivy-cache"
       },
-      "secrets": {
-        "CODESCAN_API_KEY": "secret:codescan-api-key"
-      },
       "storage": { "sizeGb": 10, "mountPath": "/app/data", "fsGroup": 10001 },
       "resources": { "cpu": 1.5, "memoryMb": 6144 }
     }
