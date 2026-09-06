@@ -18,30 +18,49 @@ import (
 
 const extraAllowedHostsSetting = "extra_allowed_hosts"
 
-// apiKeyHeader is the header PIAQEE's server-to-server client sends. On 4YI the
-// key value is injected via Secrets (never committed / never in 4yi-app.json env).
-const apiKeyHeader = "X-API-Key"
+// legacyAPIKeyHeader is the header older PIAQEE clients send. Still accepted for a
+// transition window; the canonical scheme is now Authorization: Bearer <key>.
+const legacyAPIKeyHeader = "X-API-Key"
 
 // Server bundles the dependencies the HTTP handlers need.
 type Server struct {
-	store  *store.Store
-	mgr    *scan.Manager
-	guards source.Guards
-	web    fs.FS // embedded web assets (templates/*, static/*)
-	pages  *pages
-	apiKey string // required key for /api/*; empty = enforcement disabled (dev/test only)
+	store        *store.Store
+	mgr          *scan.Manager
+	guards       source.Guards
+	web          fs.FS // embedded web assets (templates/*, static/*)
+	pages        *pages
+	apiKey       string // required key for /api/*; empty = behavior depends on authRequired
+	authRequired bool   // when true, empty apiKey fails closed (all /api/* → 503)
 }
 
-// NewServer builds a Server. webFS is the embedded web/ directory. The API key is
-// read from CODESCAN_API_KEY: when set, every /api/* request must carry it in the
-// X-API-Key header; when empty (local dev / tests) enforcement is disabled.
+// NewServer builds a Server. webFS is the embedded web/ directory.
+//
+// Auth (aligned with the 4YI platform recommendation): every /api/* request must
+// carry the key as "Authorization: Bearer <CODESCAN_API_KEY>". The same header
+// also clears the 4YI gateway's bearer-passthrough, so one header does both. The
+// legacy "X-API-Key" header is still accepted during the transition.
+//
+// CODESCAN_API_KEY holds the expected key. Empty-key behavior is governed by
+// CODESCAN_AUTH_REQUIRED:
+//   - unset/false: empty key → enforcement disabled. This is the fallback that
+//     keeps the engine usable before 4YI secret storage is wired up (local dev,
+//     or the current install where the platform secret has no value yet).
+//   - true: empty key → fail closed (every /api/* returns 503). Turn on once the
+//     secret value is configured on 4YI, so the engine never serves
+//     unauthenticated when it's meant to be protected.
 func NewServer(st *store.Store, mgr *scan.Manager, guards source.Guards, webFS fs.FS) *Server {
 	key := os.Getenv("CODESCAN_API_KEY")
-	if key == "" {
-		log.Printf("[api] WARNING: CODESCAN_API_KEY is not set — /api/* is UNAUTHENTICATED. " +
-			"This is only safe for local dev; on 4YI (route=public) the key MUST be injected via Secrets.")
+	authRequired := os.Getenv("CODESCAN_AUTH_REQUIRED") == "true"
+	if key == "" && !authRequired {
+		log.Printf("[api] WARNING: CODESCAN_API_KEY is not set and CODESCAN_AUTH_REQUIRED is off — " +
+			"/api/* is UNAUTHENTICATED. Safe only for local dev or a not-yet-secured 4YI install; " +
+			"set the secret and CODESCAN_AUTH_REQUIRED=true to enforce.")
 	}
-	return &Server{store: st, mgr: mgr, guards: guards, web: webFS, pages: parsePages(webFS), apiKey: key}
+	if key == "" && authRequired {
+		log.Printf("[api] CODESCAN_AUTH_REQUIRED=true but CODESCAN_API_KEY is empty — " +
+			"failing closed: every /api/* request returns 503 until the key is injected.")
+	}
+	return &Server{store: st, mgr: mgr, guards: guards, web: webFS, pages: parsePages(webFS), apiKey: key, authRequired: authRequired}
 }
 
 // Routes returns the HTTP handler with all routes registered.
@@ -74,17 +93,35 @@ func (s *Server) Routes() http.Handler {
 	return s.withAPIKey(mux)
 }
 
-// withAPIKey enforces the X-API-Key header on every request except the platform
-// health probe. /healthz must stay unauthenticated and cheap: the 4YI gateway
-// probes it without the key, and a failing probe causes cold-start 502s
-// (deployment guide §6). When s.apiKey is empty, enforcement is skipped.
+// withAPIKey enforces the API key on every request except the platform health
+// probe. /healthz must stay unauthenticated and cheap: the 4YI gateway probes it
+// without the key, and a failing probe causes cold-start 502s (deployment guide §6).
+//
+// The canonical credential is "Authorization: Bearer <key>" (also what clears the
+// 4YI gateway bearer-passthrough); the legacy "X-API-Key" header is still accepted.
+// Empty-key behavior: authRequired=false → skip enforcement (usable fallback);
+// authRequired=true → fail closed with 503 (key was meant to be injected but isn't).
 func (s *Server) withAPIKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || s.apiKey == "" {
+		if r.URL.Path == "/healthz" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		got := r.Header.Get(apiKeyHeader)
+		if s.apiKey == "" {
+			if s.authRequired {
+				writeErr(w, http.StatusServiceUnavailable, "auth required but no API key configured")
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		got := ""
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			got = strings.TrimPrefix(auth, "Bearer ")
+		}
+		if got == "" {
+			got = r.Header.Get(legacyAPIKeyHeader)
+		}
 		// constant-time compare to avoid leaking the key via timing.
 		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(s.apiKey)) != 1 {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
