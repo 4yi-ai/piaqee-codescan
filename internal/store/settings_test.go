@@ -39,3 +39,32 @@ func TestPutAndGetSetting(t *testing.T) {
 		t.Fatalf("got %q, want git.internal.com", got)
 	}
 }
+
+func TestCompareAndSwapSetting(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		expected, value string
+		want            bool
+	}{
+		{"missing", "wrong", false},
+		{"", "first", true},
+		{"", "stale", false},
+		{"first", "second", true},
+		{"first", "stale", false},
+		{"second", "", true},
+		{"", "restored", true},
+	} {
+		got, err := st.CompareAndSwapSetting(ctx, "allowed_hosts", tc.expected, tc.value)
+		if err != nil || got != tc.want {
+			t.Fatalf("CAS(%q,%q) = %v, %v; want %v", tc.expected, tc.value, got, err, tc.want)
+		}
+	}
+	got, err := st.GetSetting(ctx, "allowed_hosts")
+	if err != nil || got != "restored" {
+		t.Fatalf("stored = %q, %v", got, err)
+	}
+}

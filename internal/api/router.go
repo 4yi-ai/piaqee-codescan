@@ -78,6 +78,7 @@ func (s *Server) Routes() http.Handler {
 	// Async scan API (see plan §5).
 	mux.HandleFunc("POST /api/scans", s.handleCreateScan)
 	// mux.HandleFunc("GET /api/scans", s.handleListScans) // [engine-mode §3③] cross-tenant list — never expose
+	mux.HandleFunc("GET /api/settings/allowed-hosts", s.handleGetAllowedHosts)
 	mux.HandleFunc("PUT /api/settings/allowed-hosts", s.handleUpdateAllowedHosts)
 	mux.HandleFunc("GET /api/scans/{id}", s.handleGetScan)
 	mux.HandleFunc("GET /api/scans/{id}/findings", s.handleListFindings)

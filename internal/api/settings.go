@@ -1,7 +1,9 @@
 package api
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -26,8 +28,22 @@ func (s *Server) handleUpdateAllowedHosts(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.store.PutSetting(r.Context(), extraAllowedHostsSetting, strings.Join(hosts, ",")); err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not save allowed hosts")
+	raw, err := s.store.GetSetting(r.Context(), extraAllowedHostsSetting)
+	if err != nil {
+		writeErr(w, 500, "could not read allowed hosts")
+		return
+	}
+	if expected := r.Header.Get("If-Match"); expected != "" && expected != hostsRevision(raw) {
+		writeErr(w, http.StatusPreconditionFailed, "allowed hosts changed; reload before saving")
+		return
+	}
+	saved, err := s.store.CompareAndSwapSetting(r.Context(), extraAllowedHostsSetting, raw, strings.Join(hosts, ","))
+	if err != nil {
+		writeErr(w, 500, "could not save allowed hosts")
+		return
+	}
+	if !saved {
+		writeErr(w, http.StatusPreconditionFailed, "allowed hosts changed; reload before saving")
 		return
 	}
 
@@ -35,5 +51,26 @@ func (s *Server) handleUpdateAllowedHosts(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{
 		"allowed_hosts":       allowedHosts,
 		"extra_allowed_hosts": hosts,
+		"base_allowed_hosts":  s.guards.AllowedHosts,
+		"revision":            hostsRevision(strings.Join(hosts, ",")),
+	})
+}
+
+func hostsRevision(raw string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(raw))) }
+
+func (s *Server) handleGetAllowedHosts(w http.ResponseWriter, r *http.Request) {
+	raw, err := s.store.GetSetting(r.Context(), extraAllowedHostsSetting)
+	if err != nil {
+		writeErr(w, 500, "could not read allowed hosts")
+		return
+	}
+	hosts, err := source.ParseAllowedHostsCSV(raw)
+	if err != nil {
+		writeErr(w, 500, "invalid stored allowed hosts")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allowed_hosts":       source.MergeAllowedHosts(s.guards.AllowedHosts, hosts),
+		"extra_allowed_hosts": hosts, "base_allowed_hosts": s.guards.AllowedHosts, "revision": hostsRevision(raw),
 	})
 }

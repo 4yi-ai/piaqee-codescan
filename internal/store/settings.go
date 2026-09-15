@@ -31,3 +31,15 @@ func (s *Store) PutSetting(ctx context.Context, key, value string) error {
 	}
 	return nil
 }
+
+// CompareAndSwapSetting prevents concurrent editors from overwriting each other.
+func (s *Store) CompareAndSwapSetting(ctx context.Context, key, expected, value string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `INSERT INTO settings (key, value)
+ SELECT ?, ? WHERE ? = '' OR EXISTS (SELECT 1 FROM settings WHERE key = ?)
+ ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value = ?`, key, value, expected, key, expected)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n == 1, err
+}
