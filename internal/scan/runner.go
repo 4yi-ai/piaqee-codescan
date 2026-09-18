@@ -54,6 +54,7 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 	var all []store.Finding
 	var engineErrs []string
 	ran := 0
+	var completedEngines []string
 	for _, e := range r.engines {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -76,6 +77,7 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 			continue
 		}
 		ran++
+		completedEngines = append(completedEngines, e.Name())
 		for i := range found {
 			found[i].JobID = job.ID
 		}
@@ -88,7 +90,9 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 	if err := r.store.InsertFindings(ctx, all); err != nil {
 		return err
 	}
-	if err := r.store.SetSummary(ctx, job.ID, summarize(all)); err != nil {
+	summary := summarize(all)
+	summary.Coverage = &store.Coverage{Version: 1, Path: ".", Engines: completedEngines, Complete: ran == len(r.engines) && ran > 0}
+	if err := r.store.SetSummary(ctx, job.ID, summary); err != nil {
 		return err
 	}
 

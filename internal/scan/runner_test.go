@@ -70,6 +70,9 @@ func TestRunnerResilientToEngineFailure(t *testing.T) {
 		t.Errorf("want 1 finding from the good engine, got %d", len(fs))
 	}
 	got, _ := st.GetJob(context.Background(), job.ID)
+	if got.Summary.Coverage == nil || got.Summary.Coverage.Complete {
+		t.Fatal("partial scans must not report complete coverage")
+	}
 	if got.Error == "" {
 		t.Errorf("expected a partial-failure warning recorded in Error")
 	}
@@ -113,4 +116,22 @@ func TestRunnerAllEnginesFail(t *testing.T) {
 	if err := runner.Run(context.Background(), job, Secret{UploadPath: zipPath}); err == nil {
 		t.Fatal("expected Run to error when all engines fail")
 	}
+}
+
+func TestRunnerCoverage(t *testing.T) {
+	t.Run("zero findings still has full coverage", func(t *testing.T) {
+		st := openStore(t)
+		job, err := st.CreateJob(context.Background(), "coverage", store.SourceZip, "src.zip", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner := NewRunner(st, t.TempDir(), source.DefaultGuards(), mockEngine{name: "good"})
+		if err := runner.Run(context.Background(), job, Secret{UploadPath: makeZip(t)}); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := st.GetJob(context.Background(), job.ID)
+		if got.Summary.Coverage == nil || !got.Summary.Coverage.Complete || got.Summary.Coverage.Path != "." || len(got.Summary.Coverage.Engines) != 1 {
+			t.Fatalf("missing full coverage: %+v", got.Summary)
+		}
+	})
 }
