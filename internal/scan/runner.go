@@ -43,7 +43,8 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 	if err := r.store.SetStatus(ctx, job.ID, store.StatusFetching, "fetching source"); err != nil {
 		return err
 	}
-	if err := r.fetch(ctx, job, sec, srcDir); err != nil {
+	commit, err := r.fetch(ctx, job, sec, srcDir)
+	if err != nil {
 		return err
 	}
 
@@ -87,6 +88,7 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 	// ---- reachability (lightweight) + persist ----
 	tagReachability(srcDir, all)
 	all = dedupe(all)
+	attachSourceSnapshots(srcDir, job.ID, commit, all)
 	if err := r.store.InsertFindings(ctx, all); err != nil {
 		return err
 	}
@@ -109,19 +111,19 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 }
 
 // fetch materializes the source into srcDir per job.SourceType.
-func (r *realRunner) fetch(ctx context.Context, job *store.Job, sec Secret, srcDir string) error {
+func (r *realRunner) fetch(ctx context.Context, job *store.Job, sec Secret, srcDir string) (string, error) {
 	switch job.SourceType {
 	case store.SourceGit:
-		return source.CloneGit(ctx, job.SourceRef, sec.Token, sec.Branch, srcDir, r.guards)
+		return source.CloneGitWithCommit(ctx, job.SourceRef, sec.Token, sec.Branch, srcDir, r.guards)
 	case store.SourceZip:
 		if sec.UploadPath == "" {
-			return fmt.Errorf("no uploaded archive for zip job")
+			return "", fmt.Errorf("no uploaded archive for zip job")
 		}
-		return source.ExtractArchive(ctx, sec.UploadPath, srcDir, r.guards)
+		return "", source.ExtractArchive(ctx, sec.UploadPath, srcDir, r.guards)
 	case store.SourceImage:
-		return fmt.Errorf("image scanning is deferred to v2")
+		return "", fmt.Errorf("image scanning is deferred to v2")
 	default:
-		return fmt.Errorf("unknown source type %q", job.SourceType)
+		return "", fmt.Errorf("unknown source type %q", job.SourceType)
 	}
 }
 

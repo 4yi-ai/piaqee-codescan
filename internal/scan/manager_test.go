@@ -131,3 +131,40 @@ type runnerFunc func(ctx context.Context, job *store.Job, sec Secret) error
 func (f runnerFunc) Run(ctx context.Context, job *store.Job, sec Secret) error {
 	return f(ctx, job, sec)
 }
+
+func TestCancelRunningInterruptsRunner(t *testing.T) {
+	st := openStore(t)
+	mgr := NewManager(st, Config{JobsDir: t.TempDir()})
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	mgr.SetRunner(runnerFunc(func(ctx context.Context, job *store.Job, _ Secret) error {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return ctx.Err()
+	}))
+	job, err := st.CreateJob(context.Background(), "cancel-running", store.SourceZip, "source.zip", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Enqueue(job.ID, Secret{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr.Start(ctx)
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runner did not start")
+	}
+	if _, err := st.Cancel(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runner was not interrupted")
+	}
+	pollStatus(t, st, job.ID, store.StatusCanceled)
+}

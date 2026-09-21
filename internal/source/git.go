@@ -68,6 +68,17 @@ func validateBranch(branch string) error {
 // string), and git is told not to prompt so a bad token fails fast instead of
 // hanging.
 func CloneGit(ctx context.Context, cleanURL, token, branch, dir string, g Guards) error {
+	return cloneGit(ctx, cleanURL, token, branch, dir, g, nil)
+}
+
+// CloneGitWithCommit captures HEAD before credential-bearing Git metadata is removed.
+func CloneGitWithCommit(ctx context.Context, cleanURL, token, branch, dir string, g Guards) (string, error) {
+	var commit string
+	err := cloneGit(ctx, cleanURL, token, branch, dir, g, &commit)
+	return commit, err
+}
+
+func cloneGit(ctx context.Context, cleanURL, token, branch, dir string, g Guards, commit *string) error {
 	if err := mustCtx(ctx); err != nil {
 		return err
 	}
@@ -111,6 +122,13 @@ func CloneGit(ctx context.Context, cleanURL, token, branch, dir string, g Guards
 			msg = strings.ReplaceAll(msg, token, "***")
 		}
 		return fmt.Errorf("git clone failed: %v: %s", err, strings.TrimSpace(lastLine(msg)))
+	}
+
+	if commit != nil {
+		head, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
+		if err == nil && regexp.MustCompile(`^[a-fA-F0-9]{40,64}$`).MatchString(strings.TrimSpace(string(head))) {
+			*commit = strings.TrimSpace(string(head))
+		}
 	}
 
 	// Delete .git BEFORE scanning: `git clone <token>@host` writes the tokenized

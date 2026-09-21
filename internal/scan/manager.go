@@ -156,6 +156,22 @@ func (m *Manager) process(parent context.Context, id string) {
 		return
 	}
 
+	// Propagate API cancellation to the running clone/scanner subprocesses.
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if canceled, err := m.store.IsCanceled(ctx, id); err == nil && canceled {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 	err = m.runner.Run(ctx, job, sec)
 
 	// If the job was canceled mid-run, honor that over any runner error.

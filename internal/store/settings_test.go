@@ -68,3 +68,28 @@ func TestCompareAndSwapSetting(t *testing.T) {
 		t.Fatalf("stored = %q, %v", got, err)
 	}
 }
+
+func TestAllowedHostsSurviveStoreReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "scan.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := st.CompareAndSwapSetting(ctx, "extra_allowed_hosts", "", "git.example.com")
+	if err != nil || !saved {
+		t.Fatalf("save: saved=%v err=%v", saved, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	got, err := reopened.GetSetting(ctx, "extra_allowed_hosts")
+	if err != nil || got != "git.example.com" {
+		t.Fatalf("after reopen: got=%q err=%v", got, err)
+	}
+}
