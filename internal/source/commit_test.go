@@ -28,9 +28,12 @@ func TestCloneCapturesCommitBeforeRemovingMetadata(t *testing.T) {
 	run("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "fixture")
 	expected := run("rev-parse", "HEAD")
 	dest := filepath.Join(t.TempDir(), "checkout")
-	commit, err := CloneGitWithCommit(context.Background(), repo, "", "", dest, DefaultGuards())
+	commit, branch, err := CloneGitResolved(context.Background(), repo, "", "", dest, DefaultGuards())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if branch != run("symbolic-ref", "--short", "HEAD") {
+		t.Fatalf("wrong resolved branch: %q", branch)
 	}
 	if commit != expected {
 		t.Fatalf("commit=%q want=%q", commit, expected)

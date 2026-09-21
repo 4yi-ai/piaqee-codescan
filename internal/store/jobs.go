@@ -460,3 +460,9 @@ func mustAffect(res sql.Result) error {
 	}
 	return nil
 }
+
+// SetBranch persists the resolved checkout branch before scanning starts.
+func (s *Store) SetBranch(ctx context.Context, id, branch string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET branch = ? WHERE id = ?`, branch, id)
+	return err
+}

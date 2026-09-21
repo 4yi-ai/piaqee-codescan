@@ -68,17 +68,24 @@ func validateBranch(branch string) error {
 // string), and git is told not to prompt so a bad token fails fast instead of
 // hanging.
 func CloneGit(ctx context.Context, cleanURL, token, branch, dir string, g Guards) error {
-	return cloneGit(ctx, cleanURL, token, branch, dir, g, nil)
+	return cloneGit(ctx, cleanURL, token, branch, dir, g, nil, nil)
 }
 
 // CloneGitWithCommit captures HEAD before credential-bearing Git metadata is removed.
 func CloneGitWithCommit(ctx context.Context, cleanURL, token, branch, dir string, g Guards) (string, error) {
 	var commit string
-	err := cloneGit(ctx, cleanURL, token, branch, dir, g, &commit)
+	err := cloneGit(ctx, cleanURL, token, branch, dir, g, &commit, nil)
 	return commit, err
 }
 
-func cloneGit(ctx context.Context, cleanURL, token, branch, dir string, g Guards, commit *string) error {
+// CloneGitResolved returns the actual checkout branch, including a default branch.
+func CloneGitResolved(ctx context.Context, cleanURL, token, branch, dir string, g Guards) (string, string, error) {
+	var commit, resolved string
+	err := cloneGit(ctx, cleanURL, token, branch, dir, g, &commit, &resolved)
+	return commit, resolved, err
+}
+
+func cloneGit(ctx context.Context, cleanURL, token, branch, dir string, g Guards, commit *string, resolvedBranch *string) error {
 	if err := mustCtx(ctx); err != nil {
 		return err
 	}
@@ -124,6 +131,14 @@ func cloneGit(ctx context.Context, cleanURL, token, branch, dir string, g Guards
 		return fmt.Errorf("git clone failed: %v: %s", err, strings.TrimSpace(lastLine(msg)))
 	}
 
+	if resolvedBranch != nil {
+		out, err := exec.CommandContext(ctx, "git", "-C", dir, "symbolic-ref", "--short", "HEAD").Output()
+		if err == nil {
+			*resolvedBranch = strings.TrimSpace(string(out))
+		} else {
+			*resolvedBranch = branch
+		}
+	}
 	if commit != nil {
 		head, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
 		if err == nil && regexp.MustCompile(`^[a-fA-F0-9]{40,64}$`).MatchString(strings.TrimSpace(string(head))) {

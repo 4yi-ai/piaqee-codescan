@@ -114,7 +114,17 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 func (r *realRunner) fetch(ctx context.Context, job *store.Job, sec Secret, srcDir string) (string, error) {
 	switch job.SourceType {
 	case store.SourceGit:
-		return source.CloneGitWithCommit(ctx, job.SourceRef, sec.Token, sec.Branch, srcDir, r.guards)
+		commit, branch, err := source.CloneGitResolved(ctx, job.SourceRef, sec.Token, sec.Branch, srcDir, r.guards)
+		if err != nil {
+			return "", err
+		}
+		if branch != "" {
+			if err := r.store.SetBranch(ctx, job.ID, branch); err != nil {
+				return "", err
+			}
+			job.Branch = branch
+		}
+		return commit, nil
 	case store.SourceZip:
 		if sec.UploadPath == "" {
 			return "", fmt.Errorf("no uploaded archive for zip job")
