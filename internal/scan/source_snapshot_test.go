@@ -70,3 +70,38 @@ func TestSnapshotRejectsSymlinkAndUnlocatedFinding(t *testing.T) {
 		}
 	}
 }
+
+func TestLargePackageLockSnapshotLocatesExactDependency(t *testing.T) {
+	root := t.TempDir()
+	text := "{\n" + strings.Repeat("  \"padding\": \"value\",\n", 30000) + "  \"node_modules/next-extra\": {},\n  \"node_modules/next\": {\n    \"version\": \"16.2.3\"\n  }\n}"
+	if err := os.WriteFile(filepath.Join(root, "package-lock.json"), []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	findings := []store.Finding{{FilePath: "package-lock.json", PkgName: "next", PkgVer: "16.2.3", Category: "sca"}}
+	attachSourceSnapshots(root, "job", "", findings)
+	var raw struct {
+		Snapshot sourceSnapshot `json:"source_snapshot"`
+	}
+	if err := json.Unmarshal([]byte(findings[0].Raw), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw.Snapshot.HighlightLine != 30003 {
+		t.Fatalf("wrong dependency line: %d", raw.Snapshot.HighlightLine)
+	}
+	if !strings.Contains(raw.Snapshot.Content, "16.2.3") {
+		t.Fatal("missing dependency version")
+	}
+}
+
+func TestDependencySourceLineMatchesVersionAndScopedPackages(t *testing.T) {
+	lines := []string{`"node_modules/next": {`, `"version": "15.0.0"`, `},`, `"node_modules/a/node_modules/next": {`, `"version": "16.2.3"`, `},`, `"node_modules/@scope/pkg": {`, `"version": "1.0.0"`, `}`}
+	if got := dependencySourceLine(lines, "package-lock.json", "next", "16.2.3"); got != 4 {
+		t.Fatalf("version mismatch: %d", got)
+	}
+	if got := dependencySourceLine(lines, "package-lock.json", "@scope/pkg", "1.0.0"); got != 7 {
+		t.Fatalf("scoped package: %d", got)
+	}
+	if got := dependencySourceLine(lines, "package-lock.json", "next", "99.0.0"); got != 0 {
+		t.Fatal("invented location")
+	}
+}

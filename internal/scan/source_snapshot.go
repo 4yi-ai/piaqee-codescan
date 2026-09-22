@@ -54,28 +54,27 @@ func attachSourceSnapshots(root, jobID, commit string, findings []store.Finding)
 		if unsafe {
 			continue
 		}
+		limit := int64(512 * 1024)
+		if filepath.Base(name) == "package-lock.json" {
+			limit = 16 * 1024 * 1024
+		}
 		stat, err := os.Stat(current)
-		if err != nil || !stat.Mode().IsRegular() || stat.Size() > 512*1024 {
+		if err != nil || !stat.Mode().IsRegular() || stat.Size() > limit {
 			continue
 		}
 		file, err := os.Open(current)
 		if err != nil {
 			continue
 		}
-		data, err := io.ReadAll(io.LimitReader(file, 512*1024+1))
+		data, err := io.ReadAll(io.LimitReader(file, limit+1))
 		file.Close()
-		if err != nil || len(data) > 512*1024 || !utf8.Valid(data) || strings.ContainsRune(string(data), 0) {
+		if err != nil || int64(len(data)) > limit || !utf8.Valid(data) || strings.ContainsRune(string(data), 0) {
 			continue
 		}
 		lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 		line := f.Line
 		if line < 1 && f.PkgName != "" {
-			for n, text := range lines {
-				if strings.Contains(text, f.PkgName) {
-					line = n + 1
-					break
-				}
-			}
+			line = dependencySourceLine(lines, name, f.PkgName, f.PkgVer)
 		}
 		if line < 1 || line > len(lines) {
 			continue
@@ -120,4 +119,39 @@ func attachSourceSnapshots(root, jobID, commit string, findings []store.Finding)
 			f.Raw = string(encoded)
 		}
 	}
+}
+
+// Prefer package records over dependency references and require exact names.
+func dependencySourceLine(lines []string, file, name, version string) int {
+	if filepath.Base(file) == "package-lock.json" {
+		record := regexp.MustCompile(`^\s*"(?:[^" ]*/)?node_modules/` + regexp.QuoteMeta(name) + `"\s*:\s*\{`)
+		legacy := regexp.MustCompile(`^\s*"` + regexp.QuoteMeta(name) + `"\s*:\s*\{`)
+		ver := regexp.MustCompile(`^\s*"version"\s*:\s*"` + regexp.QuoteMeta(version) + `"`)
+		for _, pattern := range []*regexp.Regexp{record, legacy} {
+			for i, text := range lines {
+				if !pattern.MatchString(text) {
+					continue
+				}
+				if version == "" {
+					return i + 1
+				}
+				for n := i + 1; n < len(lines) && n <= i+8; n++ {
+					if ver.MatchString(lines[n]) {
+						return i + 1
+					}
+					if strings.Contains(lines[n], "}") {
+						break
+					}
+				}
+			}
+		}
+		return 0
+	}
+	exact := regexp.MustCompile(`(^|[\s"'])` + regexp.QuoteMeta(name) + `([\s"':]|$)`)
+	for i, text := range lines {
+		if exact.MatchString(text) {
+			return i + 1
+		}
+	}
+	return 0
 }
