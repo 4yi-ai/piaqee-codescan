@@ -171,3 +171,9 @@ func TestNormSeverity(t *testing.T) {
 		}
 	}
 }
+
+func TestTrivySecretLocationRetainsEndLineWithoutSecretValue(t *testing.T) {
+ findings, err := parseTrivy([]byte(`{"Results":[{"Target":"config.yml","Secrets":[{"RuleID":"test-secret","StartLine":3,"EndLine":5,"Match":"do-not-persist","Secret":"do-not-persist"}]}]}`), "/work")
+ if err != nil || len(findings) != 1 { t.Fatalf("parse failed: %v",err) }
+ if findings[0].Raw != `{"secret_location":{"endLine":5}}` { t.Fatalf("unexpected safe location metadata: %s",findings[0].Raw) }
+}

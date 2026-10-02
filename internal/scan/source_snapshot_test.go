@@ -33,6 +33,9 @@ func TestSourceSnapshots(t *testing.T) {
 	if snapshot.StartLine != 11 || snapshot.HighlightLine != 21 || snapshot.JobID != "job-1" || len(strings.Split(snapshot.Content, "\n")) != 21 {
 		t.Fatalf("bad snapshot: %+v", snapshot)
 	}
+	if !strings.Contains(snapshot.Content, "safe code") {
+		t.Fatal("safe context was hidden")
+	}
 	if strings.Contains(snapshot.Content, "secret-value") {
 		t.Fatal("secret leaked into neighboring finding")
 	}
@@ -104,4 +107,46 @@ func TestDependencySourceLineMatchesVersionAndScopedPackages(t *testing.T) {
 	if got := dependencySourceLine(lines, "package-lock.json", "next", "99.0.0"); got != 0 {
 		t.Fatal("invented location")
 	}
+}
+
+func TestSnapshotRedactsValuesAndMultilineSecrets(t *testing.T) {
+ root := t.TempDir()
+ text := "service: wallet\naccess_key: fake-sensitive-value\nregion: test-region\ncertificate: |\n  sensitive-part-one\n  sensitive-part-two\ntimeout: 30\npassword: |\n  password-part-one\n  password-part-two\nport: 8080\n-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----\nname: safe"
+ if err := os.WriteFile(filepath.Join(root, "config.yml"), []byte(text), 0600); err != nil { t.Fatal(err) }
+ findings := []store.Finding{
+  {FilePath:"config.yml", Line:2, Category:"secret"},
+  {FilePath:"config.yml", Line:4, Category:"secret", Raw:`{"secret_location":{"endLine":6}}`},
+  {FilePath:"config.yml", Line:7, Category:"sast"},
+ }
+ attachSourceSnapshots(root, "job", "", findings)
+ for _, finding := range findings {
+  var raw struct { Snapshot sourceSnapshot `json:"source_snapshot"` }
+  if err := json.Unmarshal([]byte(finding.Raw), &raw); err != nil { t.Fatal(err) }
+  for _, sensitive := range []string{"fake-sensitive-value", "sensitive-part-", "password-part-", "private-material"} {
+   if strings.Contains(raw.Snapshot.Content, sensitive) { t.Fatalf("sensitive value leaked: %s", sensitive) }
+  }
+  for _, safe := range []string{"service: wallet", "access_key: [REDACTED]", "region: test-region", "timeout: 30"} {
+   if !strings.Contains(raw.Snapshot.Content, safe) { t.Fatalf("missing safe context: %s", safe) }
+  }
+ }
+}
+
+func TestSnapshotUnlocatedSecretRemainsFailClosed(t *testing.T) {
+ root := t.TempDir()
+ if err := os.WriteFile(filepath.Join(root,"config.yml"), []byte("unknown-sensitive-value\nnormal-code"),0600); err != nil { t.Fatal(err) }
+ findings := []store.Finding{{FilePath:"config.yml",Category:"secret"}, {FilePath:"config.yml",Line:2,Category:"sast"}}
+ attachSourceSnapshots(root,"job","",findings)
+ if strings.Contains(findings[1].Raw,"unknown-sensitive-value") || strings.Contains(findings[1].Raw,"normal-code") { t.Fatal("unlocated secret file exposed") }
+}
+
+func TestSnapshotRedactsQuotedMultilineValue(t *testing.T) {
+ root := t.TempDir()
+ text := "name: wallet\npassword: \"first-sensitive-part\nsecond-sensitive-part\nlast-sensitive-part\"\nport: 8080"
+ if err := os.WriteFile(filepath.Join(root,"config.yml"),[]byte(text),0600); err != nil { t.Fatal(err) }
+ findings := []store.Finding{{FilePath:"config.yml",Line:5,Category:"sast"}}
+ attachSourceSnapshots(root,"job","",findings)
+ var raw struct { Snapshot sourceSnapshot `json:"source_snapshot"` }
+ if err := json.Unmarshal([]byte(findings[0].Raw),&raw); err != nil { t.Fatal(err) }
+ if strings.Contains(raw.Snapshot.Content,"sensitive-part") { t.Fatal("quoted multiline credential leaked") }
+ if !strings.Contains(raw.Snapshot.Content,"name: wallet") || !strings.Contains(raw.Snapshot.Content,"port: 8080") { t.Fatal("safe context hidden") }
 }

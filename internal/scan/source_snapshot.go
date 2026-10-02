@@ -21,16 +21,44 @@ type sourceSnapshot struct {
 	Commit        string `json:"commit,omitempty"`
 }
 
+var assignmentPrefix = regexp.MustCompile(`^(\s*(?:(?:export|const|let|var)\s+)?[A-Za-z_][A-Za-z0-9_.-]*\s*[:=]\s*)`)
+
+// Keep only the field name, never a value or trailing comment on a sensitive line.
+func redactSourceLine(text string) string {
+ if prefix := assignmentPrefix.FindString(text); prefix != "" {
+  return prefix + "[REDACTED]"
+ }
+ return "[REDACTED]"
+}
+
+func hasClosingQuote(text string, quote byte) bool {
+ for i := 0; i < len(text); i++ {
+  if text[i] == '\\' && quote == '"' { i++; continue }
+  if text[i] == quote {
+   if quote == '\'' && i+1 < len(text) && text[i+1] == quote { i++; continue }
+   return true
+  }
+ }
+ return false
+}
+
 var credentialLine = regexp.MustCompile(`(?i)(password|passwd|secret|token|api[_-]?key|authorization)\s*[=:]`)
 
 // Store bounded excerpts from this checkout only; never follow repository symlinks.
 func attachSourceSnapshots(root, jobID, commit string, findings []store.Finding) {
-	secretFiles := map[string]bool{}
-	for _, f := range findings {
-		if strings.Contains(strings.ToLower(f.Category), "secret") {
-			secretFiles[f.FilePath] = true
-		}
-	}
+ secretLines := map[string]map[int]bool{}
+ unknownSecretFiles := map[string]bool{}
+ for _, f := range findings {
+  if !strings.Contains(strings.ToLower(f.Category), "secret") { continue }
+  if f.Line < 1 { unknownSecretFiles[f.FilePath] = true; continue }
+  var raw struct { Location struct { EndLine int `json:"endLine"` } `json:"secret_location"` }
+  if f.Raw != "" && json.Unmarshal([]byte(f.Raw), &raw) != nil { unknownSecretFiles[f.FilePath] = true; continue }
+  end := raw.Location.EndLine
+  if end == 0 { end = f.Line }
+  if end < f.Line || end-f.Line > 512*1024 { unknownSecretFiles[f.FilePath] = true; continue }
+  if secretLines[f.FilePath] == nil { secretLines[f.FilePath] = map[int]bool{} }
+  for line := f.Line; line <= end; line++ { secretLines[f.FilePath][line] = true }
+ }
 	for i := range findings {
 		f := &findings[i]
 		name := f.FilePath
@@ -86,19 +114,37 @@ func attachSourceSnapshots(root, jobID, commit string, findings []store.Finding)
 		if end > len(lines) {
 			end = len(lines)
 		}
-		privateBlock := false
-		for n, text := range lines {
-			if strings.Contains(text, "-----BEGIN") && strings.Contains(text, "PRIVATE KEY") {
-				privateBlock = true
-			}
-			redact := privateBlock || secretFiles[name] || credentialLine.MatchString(text)
-			if strings.Contains(text, "-----END") && strings.Contains(text, "PRIVATE KEY") {
-				privateBlock = false
-			}
-			if redact {
-				lines[n] = "[REDACTED]"
-			}
-		}
+  // An invalid location cannot safely narrow the redaction to individual lines.
+  for n := range secretLines[name] {
+   if n > len(lines) { unknownSecretFiles[name] = true }
+  }
+  privateBlock := false
+  blockIndent := -1
+  var openQuote byte
+  for n, text := range lines {
+   if strings.Contains(text, "-----BEGIN") && strings.Contains(text, "PRIVATE KEY") { privateBlock = true }
+   indent := len(text) - len(strings.TrimLeft(text, " \t"))
+   continuation := blockIndent >= 0 && (strings.TrimSpace(text) == "" || indent > blockIndent)
+   if blockIndent >= 0 && !continuation { blockIndent = -1 }
+   quotedContinuation := openQuote != 0
+   if quotedContinuation && hasClosingQuote(text, openQuote) { openQuote = 0 }
+   sensitive := secretLines[name][n+1] || credentialLine.MatchString(text)
+   if sensitive {
+    if prefix := assignmentPrefix.FindString(text); prefix != "" {
+     value := strings.TrimSpace(strings.TrimPrefix(text, prefix))
+     if len(value) > 0 && (value[0] == '\'' || value[0] == '"') && !hasClosingQuote(value[1:], value[0]) { openQuote = value[0] }
+     // Hide YAML block values even when scanner location metadata is absent.
+     if value == "" || strings.HasPrefix(value, "|") || strings.HasPrefix(value, ">") || strings.HasPrefix(value, "#") { blockIndent = indent }
+    }
+   }
+   switch {
+   case unknownSecretFiles[name], privateBlock, continuation, quotedContinuation:
+    lines[n] = "[REDACTED]"
+   case sensitive:
+    lines[n] = redactSourceLine(text)
+   }
+   if strings.Contains(text, "-----END") && strings.Contains(text, "PRIVATE KEY") { privateBlock = false }
+  }
 		content := strings.Join(lines[start:end], "\n")
 		if len(content) > 32768 {
 			continue

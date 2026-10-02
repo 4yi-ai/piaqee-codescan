@@ -75,6 +75,7 @@ type trivyReport struct {
 			Severity  string `json:"Severity"`
 			Title     string `json:"Title"`
 			StartLine int    `json:"StartLine"`
+			EndLine int `json:"EndLine"`
 		} `json:"Secrets"`
 		Misconfigurations []struct {
 			ID            string `json:"ID"`
@@ -142,6 +143,8 @@ func parseTrivy(data []byte, dir string) ([]store.Finding, error) {
 			})
 		}
 		for _, s := range res.Secrets {
+   // Persist location metadata only; Trivy secret values must never enter Raw.
+   location := fmt.Sprintf(`{"secret_location":{"endLine":%d}}`, s.EndLine)
 			out = append(out, store.Finding{
 				Tool:     "trivy",
 				Category: "secret",
@@ -150,6 +153,7 @@ func parseTrivy(data []byte, dir string) ([]store.Finding, error) {
 				Title:    firstNonEmpty(s.Title, s.RuleID),
 				FilePath: target,
 				Line:     s.StartLine,
+				Raw: location,
 			})
 		}
 		for _, m := range res.Misconfigurations {
