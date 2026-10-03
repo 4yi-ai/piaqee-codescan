@@ -150,3 +150,85 @@ func TestSnapshotRedactsQuotedMultilineValue(t *testing.T) {
  if strings.Contains(raw.Snapshot.Content,"sensitive-part") { t.Fatal("quoted multiline credential leaked") }
  if !strings.Contains(raw.Snapshot.Content,"name: wallet") || !strings.Contains(raw.Snapshot.Content,"port: 8080") { t.Fatal("safe context hidden") }
 }
+
+func TestSnapshotMultilineSecretDoesNotRestartAtEmbeddedAssignment(t *testing.T) {
+	root := t.TempDir()
+	text := "name: wallet\npassword: \"first-sensitive-part\ntoken = 'middle-sensitive-part\nlast-sensitive-part\"\nport: 8080\nregion: safe-region"
+	if err := os.WriteFile(filepath.Join(root, "config.yml"), []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	findings := []store.Finding{{FilePath: "config.yml", Line: 5, Category: "sast"}}
+	attachSourceSnapshots(root, "job", "", findings)
+	var raw struct {
+		Snapshot sourceSnapshot `json:"source_snapshot"`
+	}
+	if err := json.Unmarshal([]byte(findings[0].Raw), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw.Snapshot.Content, "sensitive-part") {
+		t.Fatal("multiline secret leaked")
+	}
+	for _, safe := range []string{"name: wallet", "port: 8080", "region: safe-region"} {
+		if !strings.Contains(raw.Snapshot.Content, safe) {
+			t.Fatalf("safe context hidden: %s", safe)
+		}
+	}
+}
+
+func TestSnapshotKeepsOrdinaryCodeAroundLocatedSecret(t *testing.T) {
+	root := t.TempDir()
+	text := "package main\nfunc main() {\n  access_key := \"sensitive-value\"\n  count := 2\n  println(count)\n}"
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	findings := []store.Finding{
+		{FilePath: "main.go", Line: 3, Category: "secret", Raw: `{"secret_location":{"endLine":3}}`},
+		{FilePath: "main.go", Line: 5, Category: "sast"},
+	}
+	attachSourceSnapshots(root, "job", "", findings)
+	for _, finding := range findings {
+		var raw struct {
+			Snapshot sourceSnapshot `json:"source_snapshot"`
+		}
+		if err := json.Unmarshal([]byte(finding.Raw), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(raw.Snapshot.Content, "sensitive-value") {
+			t.Fatal("secret leaked")
+		}
+		for _, safe := range []string{"package main", "func main() {", "count := 2", "println(count)"} {
+			if !strings.Contains(raw.Snapshot.Content, safe) {
+				t.Fatalf("ordinary code hidden: %s", safe)
+			}
+		}
+	}
+}
+
+func TestSnapshotPrivateKeyBlockKeepsSurroundingCode(t *testing.T) {
+	root := t.TempDir()
+	text := "name: wallet\n-----BEGIN RSA PRIVATE KEY-----\nprivate-material\n-----END RSA PRIVATE KEY-----\nport: 8080\n// PRIVATE KEY is a supported type; public marker: -----BEGIN PUBLIC KEY-----\nprintln(\"safe code\")"
+	if err := os.WriteFile(filepath.Join(root, "config.txt"), []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	findings := []store.Finding{
+		{FilePath: "config.txt", Line: 3, Category: "secret", Raw: `{"secret_location":{"endLine":3}}`},
+		{FilePath: "config.txt", Line: 7, Category: "sast"},
+	}
+	attachSourceSnapshots(root, "job", "", findings)
+	for _, finding := range findings {
+		var raw struct {
+			Snapshot sourceSnapshot `json:"source_snapshot"`
+		}
+		if err := json.Unmarshal([]byte(finding.Raw), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(raw.Snapshot.Content, "private-material") {
+			t.Fatal("private key leaked")
+		}
+		for _, safe := range []string{"name: wallet", "port: 8080", "// PRIVATE KEY", "println(\"safe code\")"} {
+			if !strings.Contains(raw.Snapshot.Content, safe) {
+				t.Fatalf("ordinary code hidden: %s", safe)
+			}
+		}
+	}
+}

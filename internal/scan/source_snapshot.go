@@ -43,6 +43,7 @@ func hasClosingQuote(text string, quote byte) bool {
 }
 
 var credentialLine = regexp.MustCompile(`(?i)(password|passwd|secret|token|api[_-]?key|authorization)\s*[=:]`)
+var privateKeyBegin = regexp.MustCompile(`-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----`)
 
 // Store bounded excerpts from this checkout only; never follow repository symlinks.
 func attachSourceSnapshots(root, jobID, commit string, findings []store.Finding) {
@@ -118,18 +119,20 @@ func attachSourceSnapshots(root, jobID, commit string, findings []store.Finding)
   for n := range secretLines[name] {
    if n > len(lines) { unknownSecretFiles[name] = true }
   }
-  privateBlock := false
+  privateBlock := ""
   blockIndent := -1
   var openQuote byte
   for n, text := range lines {
-   if strings.Contains(text, "-----BEGIN") && strings.Contains(text, "PRIVATE KEY") { privateBlock = true }
+   if marker := privateKeyBegin.FindStringSubmatch(text); privateBlock == "" && marker != nil { privateBlock = marker[1] }
    indent := len(text) - len(strings.TrimLeft(text, " \t"))
    continuation := blockIndent >= 0 && (strings.TrimSpace(text) == "" || indent > blockIndent)
    if blockIndent >= 0 && !continuation { blockIndent = -1 }
    quotedContinuation := openQuote != 0
    if quotedContinuation && hasClosingQuote(text, openQuote) { openQuote = 0 }
    sensitive := secretLines[name][n+1] || credentialLine.MatchString(text)
-   if sensitive {
+   // Assignments inside a secret value are content, not new values. Restarting
+   // quote/block tracking here can hide unrelated code after the value closes.
+   if sensitive && !quotedContinuation && !continuation && privateBlock == "" {
     if prefix := assignmentPrefix.FindString(text); prefix != "" {
      value := strings.TrimSpace(strings.TrimPrefix(text, prefix))
      if len(value) > 0 && (value[0] == '\'' || value[0] == '"') && !hasClosingQuote(value[1:], value[0]) { openQuote = value[0] }
@@ -138,12 +141,12 @@ func attachSourceSnapshots(root, jobID, commit string, findings []store.Finding)
     }
    }
    switch {
-   case unknownSecretFiles[name], privateBlock, continuation, quotedContinuation:
+   case unknownSecretFiles[name], privateBlock != "", continuation, quotedContinuation:
     lines[n] = "[REDACTED]"
    case sensitive:
     lines[n] = redactSourceLine(text)
    }
-   if strings.Contains(text, "-----END") && strings.Contains(text, "PRIVATE KEY") { privateBlock = false }
+   if privateBlock != "" && strings.Contains(text, "-----END " + privateBlock + "-----") { privateBlock = "" }
   }
 		content := strings.Join(lines[start:end], "\n")
 		if len(content) > 32768 {
