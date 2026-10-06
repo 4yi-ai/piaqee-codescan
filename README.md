@@ -24,6 +24,15 @@ curl -s localhost:8080/healthz
 
 Env: `HOST` (default `0.0.0.0`), `PORT` (`8080`), `DATA_DIR` (`./data`).
 
+`CODESCAN_JOB_TIMEOUT` controls the per-job execution deadline (default `15m`).
+Use a positive Go duration, for example `45m` for larger repositories; invalid
+values stop startup. This changes the time budget, not the rules or scan scope.
+When Security Center calls this service with a `45m` budget, configure its backend
+with `CODESCAN_POLL_INTERVAL_MS=5000` and `CODESCAN_POLL_MAX_ATTEMPTS=720`.
+Existing explicit polling limits take precedence over defaults. The backend
+inline wait is capped at 55 minutes including queue time, so review caller
+limits before increasing the engine budget further.
+
 ## Build the image
 
 ```sh

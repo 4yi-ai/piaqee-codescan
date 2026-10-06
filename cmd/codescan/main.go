@@ -26,6 +26,11 @@ func main() {
 	host := env("HOST", "0.0.0.0")
 	port := env("PORT", "8080")
 	dataDir := env("DATA_DIR", "./data")
+	jobsDir := filepath.Join(dataDir, "jobs")
+	cfg, err := scanConfigFromEnv(jobsDir)
+	if err != nil {
+		log.Fatalf("scan configuration: %v", err)
+	}
 
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		log.Fatalf("create data dir %s: %v", dataDir, err)
@@ -47,7 +52,6 @@ func main() {
 
 	// Background scan worker (concurrency 1). Started before the HTTP server so
 	// enqueues from the first request are picked up immediately.
-	jobsDir := filepath.Join(dataDir, "jobs")
 	guards := source.DefaultGuards()
 	// CODESCAN_ALLOWED_HOSTS (comma-separated) adds self-hosted git hosts (e.g. a
 	// private GitLab) to the SSRF allowlist, on top of the github.com/gitlab.com
@@ -59,7 +63,7 @@ func main() {
 		}
 		guards.AllowedHosts = source.MergeAllowedHosts(guards.AllowedHosts, hosts)
 	}
-	mgr := scan.NewManager(st, scan.Config{JobsDir: jobsDir})
+	mgr := scan.NewManager(st, cfg)
 
 	// Install the real fetch+engine runner. Engines self-report availability, so
 	// a missing CLI (e.g. on a dev machine) is skipped rather than fatal.
@@ -111,4 +115,13 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// scanConfigFromEnv builds the worker configuration used by startup.
+func scanConfigFromEnv(jobsDir string) (scan.Config, error) {
+	timeout, err := time.ParseDuration(env("CODESCAN_JOB_TIMEOUT", "15m"))
+	if err != nil || timeout <= 0 {
+		return scan.Config{}, errors.New("CODESCAN_JOB_TIMEOUT must be a positive duration (for example 45m)")
+	}
+	return scan.Config{JobsDir: jobsDir, JobTimeout: timeout}, nil
 }
