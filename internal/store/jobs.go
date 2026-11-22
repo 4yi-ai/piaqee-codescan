@@ -33,13 +33,15 @@ var ErrNotFound = errors.New("not found")
 // Summary is the per-severity finding count stored on a job (JSON column).
 type Coverage struct {
 	Version  int      `json:"version"`
-	Path     string   `json:"path"`
+	Path     string   `json:"path,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
 	Engines  []string `json:"engines"`
 	Complete bool     `json:"complete"`
 }
 
 type Summary struct {
 	Coverage *Coverage `json:"coverage,omitempty"`
+	Commit   string    `json:"commit,omitempty"`
 	Critical int       `json:"critical"`
 	High     int       `json:"high"`
 	Medium   int       `json:"medium"`

@@ -39,6 +39,19 @@ limits before increasing the engine budget further.
 docker build -t codescan .   # bundles semgrep + trivy into the runtime image
 ```
 
+## Git scan scope
+
+`POST /api/scans` accepts optional `scan_paths` for Git sources. Supply an array
+of up to 20 literal directories relative to the selected branch's checkout, for
+example `["apps/portal", "services/api"]`. Omitting the array or sending an
+empty array scans the whole checkout. A missing directory fails the job.
+
+Scoped jobs report the applied directories in `summary.coverage.paths` with
+`version: 2`. Whole-checkout jobs retain `version: 1` and `path: "."`. Findings
+use repository-relative paths. Dependency scanning uses the manifests and lock
+files inside the selected directories. Use a whole-checkout scan for projects
+that depend on a shared lockfile outside those directories.
+
 ## Milestones
 
 - [x] **M0** skeleton: Go module, `/healthz`, SQLite migration, embedded web, Dockerfile

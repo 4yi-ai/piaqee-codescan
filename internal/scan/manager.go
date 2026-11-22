@@ -24,9 +24,10 @@ var ErrQueueFull = errors.New("scan queue is full")
 // use-once git token and/or the local path of an uploaded archive. It lives in
 // the Manager's memory only from Enqueue until the worker picks the job up.
 type Secret struct {
-	Token      string // use-once git token; dropped after clone
-	UploadPath string // local path of an uploaded zip/tar (zip source)
-	Branch     string // optional git branch/tag to clone (empty = repo default)
+	Token      string   // use-once git token; dropped after clone
+	UploadPath string   // local path of an uploaded zip/tar (zip source)
+	Branch     string   // optional git branch/tag to clone (empty = repo default)
+	ScanPaths  []string // normalized repository-relative directories for Git scans
 }
 
 // Runner performs the fetch + engine work for one job. It reports progress and

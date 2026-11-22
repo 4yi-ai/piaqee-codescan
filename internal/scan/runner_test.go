@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/4yi-ai/codescan/internal/source"
@@ -134,4 +136,87 @@ func TestRunnerCoverage(t *testing.T) {
 			t.Fatalf("missing full coverage: %+v", got.Summary)
 		}
 	})
+}
+
+type checkoutInspector struct {
+	checks func(string) error
+}
+
+func (checkoutInspector) Name() string    { return "inspector" }
+func (checkoutInspector) Available() bool { return true }
+func (e checkoutInspector) Scan(_ context.Context, root string) ([]store.Finding, error) {
+	if err := e.checks(root); err != nil {
+		return nil, err
+	}
+	return []store.Finding{{Category: "sast", FilePath: "apps/portal/app.js", Line: 1, RuleID: "example"}}, nil
+}
+
+func TestRunnerScopedGitCheckout(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	git("init", "-b", "main")
+	for _, name := range []string{"apps/portal/app.js", "services/api/app.js", "unselected/package-lock.json"} {
+		file := filepath.Join(repo, name)
+		if err := os.MkdirAll(filepath.Dir(file), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("test fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(repo, "apps/portal/link")
+	if err := os.Symlink("../../unselected", link); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "--all")
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "core.hooksPath=/dev/null", "commit", "-m", "Create fixture checkout")
+
+	st := openStore(t)
+	runner := NewRunner(st, t.TempDir(), source.DefaultGuards(), checkoutInspector{checks: func(root string) error {
+		for _, name := range []string{"apps/portal/app.js", "services/api/app.js"} {
+			if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+				return err
+			}
+		}
+		for _, name := range []string{"unselected", "apps/portal/link"} {
+			if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
+				return fmt.Errorf("unexpected scanner input: %s", name)
+			}
+		}
+		return nil
+	}})
+	job, err := st.CreateJob(ctx, "scope", store.SourceGit, repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"apps/portal", "services/api"}
+	if err := runner.Run(ctx, job, Secret{Branch: "main", ScanPaths: paths}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage := got.Summary.Coverage
+	if coverage.Version != 2 || !coverage.Complete || !reflect.DeepEqual(coverage.Paths, paths) || len(got.Summary.Commit) != 40 {
+		t.Fatalf("unexpected scope summary: %+v", got.Summary)
+	}
+	findings, err := st.ListFindings(ctx, job.ID, store.FindingFilter{})
+	if err != nil || len(findings) != 1 || findings[0].FilePath != "apps/portal/app.js" {
+		t.Fatalf("unexpected findings: %+v, %v", findings, err)
+	}
+	missing, err := st.CreateJob(ctx, "scope-missing", store.SourceGit, repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(ctx, missing, Secret{Branch: "main", ScanPaths: []string{"missing"}}); err == nil {
+		t.Fatal("missing directory must fail the scan")
+	}
 }

@@ -18,10 +18,11 @@ import (
 
 // createScanRequest is the JSON POST /api/scans body (git source).
 type createScanRequest struct {
-	SourceType string `json:"source_type"`      // git (image → v2)
-	SourceRef  string `json:"source_ref"`       // repo url
-	Token      string `json:"token,omitempty"`  // use-once; never stored/logged
-	Branch     string `json:"branch,omitempty"` // optional branch/tag (empty = default)
+	SourceType string   `json:"source_type"`      // git (image → v2)
+	SourceRef  string   `json:"source_ref"`       // repo url
+	Token      string   `json:"token,omitempty"`  // use-once; never stored/logged
+	Branch     string   `json:"branch,omitempty"` // optional branch/tag (empty = default)
+	ScanPaths  []string `json:"scan_paths,omitempty"`
 }
 
 // maxUploadBytes caps an uploaded archive (compressed). The uncompressed tree is
@@ -79,10 +80,16 @@ func (s *Server) createGitScan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	paths, err := source.NormalizeScanPaths(req.ScanPaths)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	token := req.Token
 	req.Token = "" // drop our struct copy immediately
-	s.enqueueJob(w, r, store.SourceGit, cleanURL, strings.TrimSpace(req.Branch), scan.Secret{Token: token, Branch: strings.TrimSpace(req.Branch)})
+	branch := strings.TrimSpace(req.Branch)
+	s.enqueueJob(w, r, store.SourceGit, cleanURL, branch, scan.Secret{Token: token, Branch: branch, ScanPaths: paths})
 }
 
 // createZipScan handles the multipart path: save the uploaded archive under the

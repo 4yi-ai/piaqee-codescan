@@ -47,6 +47,15 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 	if err != nil {
 		return err
 	}
+	if len(sec.ScanPaths) > 0 {
+		// The scanners work from the staged tree, so an excluded file cannot
+		// influence results even when its path would match a scanner's default.
+		scopedRoot := filepath.Join(r.jobsDir, job.ID, "scoped")
+		if err := source.StageScanPaths(ctx, srcDir, scopedRoot, sec.ScanPaths); err != nil {
+			return err
+		}
+		srcDir = scopedRoot
+	}
 
 	// ---- scan phase ----
 	if err := r.store.SetStatus(ctx, job.ID, store.StatusScanning, "scanning"); err != nil {
@@ -93,7 +102,13 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 		return err
 	}
 	summary := summarize(all)
+	summary.Commit = commit
 	summary.Coverage = &store.Coverage{Version: 1, Path: ".", Engines: completedEngines, Complete: ran == len(r.engines) && ran > 0}
+	if len(sec.ScanPaths) > 0 {
+		summary.Coverage.Version = 2
+		summary.Coverage.Path = ""
+		summary.Coverage.Paths = sec.ScanPaths
+	}
 	if err := r.store.SetSummary(ctx, job.ID, summary); err != nil {
 		return err
 	}
