@@ -1,6 +1,22 @@
 package engine
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestTrivyPreservesDependencyAdvisoryMetadata(t *testing.T) {
+	report := `{"Results":[{"Target":"go.mod","Vulnerabilities":[{"VulnerabilityID":"GHSA-aaaa-bbbb-cccc","PkgName":"example.com/lib","InstalledVersion":"v1.0.0","FixedVersion":"v1.0.1","AffectedVersion":"<v1.0.1","PrimaryURL":"https://github.com/advisories/GHSA-aaaa-bbbb-cccc","CVSS":{"nvd":{"V3Score":7.5,"V3Vector":"CVSS:3.1/AV:N"}}}]}]}`
+	findings, err := parseTrivy([]byte(report), ".")
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("parse result: %+v %v", findings, err)
+	}
+	want := `{"dependency":{"packageName":"example.com/lib","installedVersion":"v1.0.0","fixedVersion":"v1.0.1","affectedVersions":"<v1.0.1","advisory":"GHSA-aaaa-bbbb-cccc","references":["https://github.com/advisories/GHSA-aaaa-bbbb-cccc"],"score":7.5,"vector":"CVSS:3.1/AV:N"}}`
+	// The JSON encoder escapes HTML metacharacters without changing the value.
+	if findings[0].Raw != strings.ReplaceAll(want, "<", `\u003c`) {
+		t.Fatalf("unexpected dependency metadata: %s", findings[0].Raw)
+	}
+}
 
 func TestParseSemgrep(t *testing.T) {
 	data := []byte(`{
@@ -173,7 +189,11 @@ func TestNormSeverity(t *testing.T) {
 }
 
 func TestTrivySecretLocationRetainsEndLineWithoutSecretValue(t *testing.T) {
- findings, err := parseTrivy([]byte(`{"Results":[{"Target":"config.yml","Secrets":[{"RuleID":"test-secret","StartLine":3,"EndLine":5,"Match":"do-not-persist","Secret":"do-not-persist"}]}]}`), "/work")
- if err != nil || len(findings) != 1 { t.Fatalf("parse failed: %v",err) }
- if findings[0].Raw != `{"secret_location":{"endLine":5}}` { t.Fatalf("unexpected safe location metadata: %s",findings[0].Raw) }
+	findings, err := parseTrivy([]byte(`{"Results":[{"Target":"config.yml","Secrets":[{"RuleID":"test-secret","StartLine":3,"EndLine":5,"Match":"do-not-persist","Secret":"do-not-persist"}]}]}`), "/work")
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if findings[0].Raw != `{"secret_location":{"endLine":5}}` {
+		t.Fatalf("unexpected safe location metadata: %s", findings[0].Raw)
+	}
 }

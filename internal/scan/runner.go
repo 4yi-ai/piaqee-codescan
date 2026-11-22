@@ -2,9 +2,11 @@ package scan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -47,7 +49,7 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 	if err != nil {
 		return err
 	}
-	if len(sec.ScanPaths) > 0 {
+	if len(sec.ScanPaths) > 0 && sec.PathRules == nil {
 		// The scanners work from the staged tree, so an excluded file cannot
 		// influence results even when its path would match a scanner's default.
 		scopedRoot := filepath.Join(r.jobsDir, job.ID, "scoped")
@@ -55,6 +57,10 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 			return err
 		}
 		srcDir = scopedRoot
+	}
+	steps, err := r.scanSteps(ctx, srcDir, filepath.Join(r.jobsDir, job.ID), sec)
+	if err != nil {
+		return err
 	}
 
 	// ---- scan phase ----
@@ -65,7 +71,14 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 	var engineErrs []string
 	ran := 0
 	var completedEngines []string
-	for _, e := range r.engines {
+	engineDetails := make(map[string]store.EngineDetails)
+	remaining := make(map[string]int)
+	for _, step := range steps {
+		remaining[step.engine.Name()]++
+	}
+	secretsFullSource := false
+	for _, step := range steps {
+		e := step.engine
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -74,7 +87,7 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 			continue
 		}
 		_ = r.store.SetStatus(ctx, job.ID, store.StatusScanning, "running "+e.Name())
-		found, err := e.Scan(ctx, srcDir)
+		found, err := step.scan(ctx)
 		if err != nil {
 			// One engine failing must not discard the other engine's results:
 			// record the error and keep going (plan: scanner should be resilient).
@@ -87,7 +100,18 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 			continue
 		}
 		ran++
-		completedEngines = append(completedEngines, e.Name())
+		remaining[e.Name()]--
+		if remaining[e.Name()] == 0 {
+			completedEngines = append(completedEngines, e.Name())
+			if reporter, ok := e.(interface {
+				Details(context.Context) store.EngineDetails
+			}); ok {
+				engineDetails[e.Name()] = reporter.Details(ctx)
+			}
+		}
+		if step.root == srcDir && slices.Contains(step.detectors, "secret") {
+			secretsFullSource = true
+		}
 		for i := range found {
 			found[i].JobID = job.ID
 		}
@@ -103,17 +127,31 @@ func (r *realRunner) Run(ctx context.Context, job *store.Job, sec Secret) error 
 	}
 	summary := summarize(all)
 	summary.Commit = commit
-	summary.Coverage = &store.Coverage{Version: 1, Path: ".", Engines: completedEngines, Complete: ran == len(r.engines) && ran > 0}
+	summary.EngineDetails = engineDetails
+	summary.Coverage = &store.Coverage{Version: 1, Path: ".", Engines: completedEngines, Complete: ran == len(steps) && ran > 0}
 	if len(sec.ScanPaths) > 0 {
 		summary.Coverage.Version = 2
 		summary.Coverage.Path = ""
 		summary.Coverage.Paths = sec.ScanPaths
+	}
+	if sec.PathRules != nil {
+		encoded, err := json.Marshal(sec.PathRules)
+		if err != nil {
+			return err
+		}
+		summary.Coverage.Version = 3
+		summary.Coverage.Path = ""
+		summary.Coverage.PathRules = encoded
+		summary.Coverage.SecretsFullSource = secretsFullSource
+		summary.Coverage.Complete = summary.Coverage.Complete && secretsFullSource
 	}
 	if err := r.store.SetSummary(ctx, job.ID, summary); err != nil {
 		return err
 	}
 
 	switch {
+	case sec.PathRules != nil && !secretsFullSource:
+		return fmt.Errorf("secret scan did not complete over the full source")
 	case ran == 0 && len(engineErrs) > 0:
 		// Every engine failed → the scan failed.
 		return fmt.Errorf("%s", strings.Join(engineErrs, "; "))

@@ -45,7 +45,7 @@ func NormalizeScanPaths(paths []string) ([]string, error) {
 
 // StageScanPaths moves directories from a disposable checkout into an isolated
 // scanner root. Repository-relative paths stay intact for findings and previews.
-func StageScanPaths(ctx context.Context, checkout, target string, directories []string) error {
+func ValidateScanPaths(checkout string, directories []string) error {
 	for _, directory := range directories {
 		current := checkout
 		for _, part := range strings.Split(directory, "/") {
@@ -55,6 +55,13 @@ func StageScanPaths(ctx context.Context, checkout, target string, directories []
 				return fmt.Errorf("scan directory unavailable on this branch: %s", directory)
 			}
 		}
+	}
+	return nil
+}
+
+func StageScanPaths(ctx context.Context, checkout, target string, directories []string) error {
+	if err := ValidateScanPaths(checkout, directories); err != nil {
+		return err
 	}
 	for _, directory := range directories {
 		if err := ctx.Err(); err != nil {

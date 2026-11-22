@@ -32,3 +32,26 @@ func TestGitScanAcceptsRepositoryDirectories(t *testing.T) {
 		})
 	}
 }
+
+func TestGitScanValidatesDetectorPathRules(t *testing.T) {
+	t.Setenv("CODESCAN_API_KEY", "example-key")
+	srv := newTestServer(t)
+	for _, tc := range []struct {
+		rules  string
+		status int
+	}{
+		{`{"include":["src/**"],"exclude":{"sast":["**/*.test.tsx"]}}`, http.StatusAccepted},
+		{`{"exclude":{"secrets":["docs/**"]}}`, http.StatusBadRequest},
+		{`{"include":["../private/**"]}`, http.StatusBadRequest},
+	} {
+		body := `{"source_type":"git","source_ref":"https://github.com/example/repository.git","path_rules":` + tc.rules + `}`
+		req := httptest.NewRequest(http.MethodPost, "/api/scans", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer example-key")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != tc.status {
+			t.Fatalf("%s: status %d, want %d; %s", tc.rules, rec.Code, tc.status, rec.Body.String())
+		}
+	}
+}

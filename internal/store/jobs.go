@@ -32,21 +32,29 @@ var ErrNotFound = errors.New("not found")
 
 // Summary is the per-severity finding count stored on a job (JSON column).
 type Coverage struct {
-	Version  int      `json:"version"`
-	Path     string   `json:"path,omitempty"`
-	Paths    []string `json:"paths,omitempty"`
-	Engines  []string `json:"engines"`
-	Complete bool     `json:"complete"`
+	Version           int             `json:"version"`
+	Path              string          `json:"path,omitempty"`
+	Paths             []string        `json:"paths,omitempty"`
+	PathRules         json.RawMessage `json:"path_rules,omitempty"`
+	SecretsFullSource bool            `json:"secrets_full_source,omitempty"`
+	Engines           []string        `json:"engines"`
+	Complete          bool            `json:"complete"`
 }
 
 type Summary struct {
-	Coverage *Coverage `json:"coverage,omitempty"`
-	Commit   string    `json:"commit,omitempty"`
-	Critical int       `json:"critical"`
-	High     int       `json:"high"`
-	Medium   int       `json:"medium"`
-	Low      int       `json:"low"`
-	Info     int       `json:"info"`
+	Coverage      *Coverage                `json:"coverage,omitempty"`
+	Commit        string                   `json:"commit,omitempty"`
+	EngineDetails map[string]EngineDetails `json:"engine_details,omitempty"`
+	Critical      int                      `json:"critical"`
+	High          int                      `json:"high"`
+	Medium        int                      `json:"medium"`
+	Low           int                      `json:"low"`
+	Info          int                      `json:"info"`
+}
+
+type EngineDetails struct {
+	Version string `json:"version,omitempty"`
+	Ruleset string `json:"ruleset,omitempty"`
 }
 
 // Job is a scan task row.

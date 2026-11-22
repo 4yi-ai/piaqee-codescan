@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/4yi-ai/codescan/internal/source"
 	"github.com/4yi-ai/codescan/internal/store"
 )
 
@@ -28,6 +29,7 @@ type Secret struct {
 	UploadPath string   // local path of an uploaded zip/tar (zip source)
 	Branch     string   // optional git branch/tag to clone (empty = repo default)
 	ScanPaths  []string // normalized repository-relative directories for Git scans
+	PathRules  *source.PathRules
 }
 
 // Runner performs the fetch + engine work for one job. It reports progress and

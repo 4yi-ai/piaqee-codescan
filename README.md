@@ -39,7 +39,7 @@ limits before increasing the engine budget further.
 docker build -t codescan .   # bundles semgrep + trivy into the runtime image
 ```
 
-## Git scan scope
+## Scan scope
 
 `POST /api/scans` accepts optional `scan_paths` for Git sources. Supply an array
 of up to 20 literal directories relative to the selected branch's checkout, for
@@ -51,6 +51,22 @@ Scoped jobs report the applied directories in `summary.coverage.paths` with
 use repository-relative paths. Dependency scanning uses the manifests and lock
 files inside the selected directories. Use a whole-checkout scan for projects
 that depend on a shared lockfile outside those directories.
+
+Both Git requests and archive uploads support optional `path_rules`. For an
+archive, supply the JSON object as a multipart field. `include` narrows the
+source for code, dependency and infrastructure scanners. Supply `exclude`
+lists by detector (`sast`, `sca`, `iac`). Patterns are relative to the source
+root, with `*`, `?`, and `**` for nested paths. A wildcard pattern without a
+slash, such as `*.test.ts`, matches at any depth. For example:
+
+```json
+{"include":["src/**"],"exclude":{"sast":["**/*.test.ts"]}}
+```
+
+Secret detection still reads the original source. Policy runs record the
+effective rules and whether full-source secret detection completed under
+`summary.coverage` version 3. Successful engines report available software
+and ruleset versions in `summary.engine_details`.
 
 ## Milestones
 

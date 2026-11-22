@@ -18,11 +18,12 @@ import (
 
 // createScanRequest is the JSON POST /api/scans body (git source).
 type createScanRequest struct {
-	SourceType string   `json:"source_type"`      // git (image → v2)
-	SourceRef  string   `json:"source_ref"`       // repo url
-	Token      string   `json:"token,omitempty"`  // use-once; never stored/logged
-	Branch     string   `json:"branch,omitempty"` // optional branch/tag (empty = default)
-	ScanPaths  []string `json:"scan_paths,omitempty"`
+	SourceType string            `json:"source_type"`      // git (image → v2)
+	SourceRef  string            `json:"source_ref"`       // repo url
+	Token      string            `json:"token,omitempty"`  // use-once; never stored/logged
+	Branch     string            `json:"branch,omitempty"` // optional branch/tag (empty = default)
+	ScanPaths  []string          `json:"scan_paths,omitempty"`
+	PathRules  *source.PathRules `json:"path_rules,omitempty"`
 }
 
 // maxUploadBytes caps an uploaded archive (compressed). The uncompressed tree is
@@ -85,11 +86,16 @@ func (s *Server) createGitScan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	pathRules, err := source.NormalizePathRules(req.PathRules)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	token := req.Token
 	req.Token = "" // drop our struct copy immediately
 	branch := strings.TrimSpace(req.Branch)
-	s.enqueueJob(w, r, store.SourceGit, cleanURL, branch, scan.Secret{Token: token, Branch: branch, ScanPaths: paths})
+	s.enqueueJob(w, r, store.SourceGit, cleanURL, branch, scan.Secret{Token: token, Branch: branch, ScanPaths: paths, PathRules: pathRules})
 }
 
 // createZipScan handles the multipart path: save the uploaded archive under the
@@ -102,6 +108,21 @@ func (s *Server) createZipScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
+	var pathRules *source.PathRules
+	if raw := r.FormValue("path_rules"); raw != "" {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if len(raw) > 64<<10 || decoder.Decode(&pathRules) != nil || decoder.Decode(new(any)) != io.EOF {
+			writeErr(w, http.StatusBadRequest, "invalid path_rules")
+			return
+		}
+		var err error
+		pathRules, err = source.NormalizePathRules(pathRules)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	file, hdr, err := r.FormFile("archive")
 	if err != nil {
@@ -134,7 +155,7 @@ func (s *Server) createZipScan(w http.ResponseWriter, r *http.Request) {
 	if ref == "" || ref == "." || ref == string(os.PathSeparator) {
 		ref = "upload"
 	}
-	s.enqueueJobWithID(w, r, id, store.SourceZip, ref, "", scan.Secret{UploadPath: uploadPath})
+	s.enqueueJobWithID(w, r, id, store.SourceZip, ref, "", scan.Secret{UploadPath: uploadPath, PathRules: pathRules})
 }
 
 // enqueueJob generates an id then delegates to enqueueJobWithID.

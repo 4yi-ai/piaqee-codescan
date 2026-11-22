@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/4yi-ai/codescan/internal/store"
@@ -22,13 +23,17 @@ func (e *TrivyFS) Name() string { return "trivy" }
 func (e *TrivyFS) Available() bool { return available("trivy") }
 
 func (e *TrivyFS) Scan(ctx context.Context, dir string) ([]store.Finding, error) {
+	return e.ScanDetectors(ctx, dir, []string{"vuln", "secret", "misconfig"})
+}
+
+func (e *TrivyFS) ScanDetectors(ctx context.Context, dir string, detectors []string) ([]store.Finding, error) {
 	args := []string{
 		"fs",
 		// license scanning is intentionally OFF: it emits one finding per
 		// dependency license (mostly MIT/ISC/etc. — compliance info, not security)
 		// and on a real project drowns out the actual vulnerabilities. Security
 		// scanners only. (Re-add "license" here if a compliance view is wanted.)
-		"--scanners", "vuln,secret,misconfig",
+		"--scanners", strings.Join(detectors, ","),
 		"--format", "json",
 		"--quiet",
 		"--no-progress",
@@ -60,22 +65,13 @@ type trivyReport struct {
 			Version      string `json:"Version"`
 			Relationship string `json:"Relationship"` // direct | indirect | root | workspace | ...
 		} `json:"Packages"`
-		Vulnerabilities []struct {
-			VulnerabilityID  string `json:"VulnerabilityID"`
-			PkgID            string `json:"PkgID"`
-			PkgName          string `json:"PkgName"`
-			InstalledVersion string `json:"InstalledVersion"`
-			FixedVersion     string `json:"FixedVersion"`
-			Severity         string `json:"Severity"`
-			Title            string `json:"Title"`
-			Description      string `json:"Description"`
-		} `json:"Vulnerabilities"`
-		Secrets []struct {
+		Vulnerabilities []trivyVulnerability `json:"Vulnerabilities"`
+		Secrets         []struct {
 			RuleID    string `json:"RuleID"`
 			Severity  string `json:"Severity"`
 			Title     string `json:"Title"`
 			StartLine int    `json:"StartLine"`
-			EndLine int `json:"EndLine"`
+			EndLine   int    `json:"EndLine"`
 		} `json:"Secrets"`
 		Misconfigurations []struct {
 			ID            string `json:"ID"`
@@ -95,6 +91,69 @@ type trivyReport struct {
 			Category string `json:"Category"`
 		} `json:"Licenses"`
 	} `json:"Results"`
+}
+
+type trivyVulnerability struct {
+	VulnerabilityID  string
+	PkgID            string
+	PkgName          string
+	InstalledVersion string
+	FixedVersion     string
+	AffectedVersion  string
+	Severity         string
+	Title            string
+	Description      string
+	PrimaryURL       string
+	References       []string
+	SeveritySource   string
+	CVSS             map[string]struct {
+		V3Score  *float64
+		V3Vector string
+		V4Score  *float64
+		V4Vector string
+	}
+}
+
+func (v trivyVulnerability) dependencyRaw() string {
+	type dependency struct {
+		PackageName      string   `json:"packageName,omitempty"`
+		InstalledVersion string   `json:"installedVersion,omitempty"`
+		FixedVersion     string   `json:"fixedVersion,omitempty"`
+		AffectedVersions string   `json:"affectedVersions,omitempty"`
+		Advisory         string   `json:"advisory,omitempty"`
+		References       []string `json:"references,omitempty"`
+		Score            *float64 `json:"score,omitempty"`
+		Vector           string   `json:"vector,omitempty"`
+	}
+	info := dependency{PackageName: v.PkgName, InstalledVersion: v.InstalledVersion, FixedVersion: v.FixedVersion, AffectedVersions: v.AffectedVersion, Advisory: v.VulnerabilityID}
+	for _, reference := range append([]string{v.PrimaryURL}, v.References...) {
+		if len(info.References) == 5 {
+			break
+		}
+		if strings.HasPrefix(reference, "https://") && len(reference) <= 1000 && !slices.Contains(info.References, reference) {
+			info.References = append(info.References, reference)
+		}
+	}
+	var sources []string
+	for name := range v.CVSS {
+		sources = append(sources, name)
+	}
+	slices.Sort(sources)
+	for _, name := range append([]string{v.SeveritySource, "nvd"}, sources...) {
+		rating := v.CVSS[name]
+		if rating.V4Vector != "" {
+			info.Score, info.Vector = rating.V4Score, rating.V4Vector
+			break
+		}
+		if rating.V3Vector != "" {
+			info.Score, info.Vector = rating.V3Score, rating.V3Vector
+			break
+		}
+	}
+	encoded, _ := json.Marshal(struct {
+		Dependency dependency `json:"dependency"`
+	}{info})
+	return string(encoded)
 }
 
 func parseTrivy(data []byte, dir string) ([]store.Finding, error) {
@@ -140,11 +199,12 @@ func parseTrivy(data []byte, dir string) ([]store.Finding, error) {
 				PkgVer:       v.InstalledVersion,
 				FixedVer:     v.FixedVersion,
 				Relationship: r,
+				Raw:          v.dependencyRaw(),
 			})
 		}
 		for _, s := range res.Secrets {
-   // Persist location metadata only; Trivy secret values must never enter Raw.
-   location := fmt.Sprintf(`{"secret_location":{"endLine":%d}}`, s.EndLine)
+			// Persist location metadata only; Trivy secret values must never enter Raw.
+			location := fmt.Sprintf(`{"secret_location":{"endLine":%d}}`, s.EndLine)
 			out = append(out, store.Finding{
 				Tool:     "trivy",
 				Category: "secret",
@@ -153,7 +213,7 @@ func parseTrivy(data []byte, dir string) ([]store.Finding, error) {
 				Title:    firstNonEmpty(s.Title, s.RuleID),
 				FilePath: target,
 				Line:     s.StartLine,
-				Raw: location,
+				Raw:      location,
 			})
 		}
 		for _, m := range res.Misconfigurations {
